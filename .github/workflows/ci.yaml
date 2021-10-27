@@ -4,7 +4,7 @@ on:
     branches:
       - santander
 env:
-  uuid: 7722381021
+  uuid: 772238
 jobs:
   docker:
     runs-on: ubuntu-18.04
@@ -14,13 +14,31 @@ jobs:
         uses: actions/checkout@v2
       -
         name: build
-        run: docker build --file Dockerfile --tag phpinfo:${uuid} .
+        run: for app in hasher rng webui worker; do docker build -f ${app}/Dockerfile -t ${app}:${uuid} .; done
       -
-        name: run
-        run: docker run -d --entrypoint /usr/bin/php --name phpinfo -p 80:8080 -v ${PWD}/src/index.php:/src/index.php:ro phpinfo:${uuid} -f src/index.php -S 0.0.0.0:8080
+        name: network
+        run: for app in hasher redis rng; do docker network create ${app}; done
+      -
+        name: run-redis
+        run: docker run -d --entrypoint /usr/local/bin/docker-entrypoint.sh --name redis --network redis --read-only --restart always -v redis:/data/:rw library/redis:alpine redis-server
+      -
+        name: run-hasher
+        run: docker run -d --entrypoint /usr/local/bin/ruby --name hasher --network hasher --read-only --restart always -v ${PWD}/hasher/hasher.rb:/hasher.rb:ro hasher:${uuid} hasher.rb
+      -
+        name: run-rng
+        run: docker run -d --entrypoint /usr/local/bin/python --name rng --network rng --read-only --restart always -v ${PWD}/rng/rng.py:/rng.py:ro -v /usr/local/lib/python3.10/http/__pycache__/ -v /usr/local/lib/python3.10/__pycache__/ rng:${uuid} rng.py
+      -
+        name: run-worker
+        run: docker run -d --entrypoint /usr/local/bin/python --name worker --network redis --read-only --restart always -v ${PWD}/worker/worker.py:/worker.py:ro -v /usr/local/lib/python3.10/distutils/__pycache__/ worker:${uuid} worker.py
+      -
+        name: network-worker
+        run: for network in hasher rng; do docker network connect ${network} worker; done
+      -
+        name: run-webui
+        run: docker run -d --entrypoint /usr/local/bin/node --name webui --network redis -p 80:8080 --read-only --restart always -v ${PWD}/webui/webui.js:/webui.js:ro -v ${PWD}/webui/files/:/files/:ro webui:${uuid} webui.js
       -
         name: test
-        run: while true; do sleep 10; curl localhost/src/index.php | grep phpinfo && break; done
+        run: while true; do sleep 10; curl localhost/index.html | grep -i Coin && break; done
   swarm:
     runs-on: ubuntu-18.04
     steps:
@@ -39,15 +57,12 @@ jobs:
       -
         name: nodeport
         run: sed -i /8080:8080/s/8080/80/ docker-compose.yaml
-      - 
+      -
         name: image
         run: sed -i /image:.*phpinfo/s/image:.*$/image:' 'phpinfo:${uuid}/ docker-compose.yaml
       -
         name: deploy
         run: docker stack deploy -c docker-compose.yaml phpinfo
-      -
-        name: temp
-        run: ifconfig
       -
         name: test
         run: while true; do sleep 10; curl $( ifconfig | grep eth0 -A 1 | awk /inet/'{ print $2 }' )/src/index.php | grep phpinfo && break; done
